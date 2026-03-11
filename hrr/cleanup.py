@@ -217,3 +217,49 @@ class NaiveMemory(CleanupMemory):
         """
 
         self.n -= k
+
+class HNSWMemory(CleanupMemory):
+    """A hierarchical navigable small world (HNSW) cleanup memory.
+
+    Based on Yalkov & Yashuin (2018), HNSW is a sparse graph over a vector space designed to make 
+    approximate nearest neighbour search efficient. When a vector is added, it is connected with
+    its top k nearest neighbours in the graph, and, with some constant probability p, it is added
+    to another graph on the next "layer" up, repeatedly, until it is no longer on the layer below
+    the current one. Search proceeds by traversing the graph to find the nearest neighbour at the
+    top level, then starting from the same vertex but on the next level down, repeating the search,
+    and so on to the bottom layer. Nearest neighbour search is therefore achieved in O(logn) time,
+    although the nearest neighbour is not guaranteed to be exact.
+
+    doi: https://doi.org/10.1109/TPAMI.2018.2889473
+
+    Attributes:
+        n (int): the total number of vertices currently at the bottom layer.
+        d (int): the dimension of the vectors on the space.
+        graph (Graph):  a list of vectors paired with a horizontal adjacency list, and each vertex's 
+                        list position on the next layer.
+        dtype (dtype): Type of the vectors stored in cleanup memory.
+        sim (Callable): Function that computes the similarity between two vectors in case they 
+                        aren't HRRs. Default cosine similarity.
+    """
+    pass
+
+
+class Graph[n, d, l]:
+    """A hierarchical graph over a d-dimensional vector space with n vertices at the bottom layer,
+    and l layers.
+
+    Attributes:
+    n (int): Number of vertices at the bottom.
+    d (int): Number of dimensions of the space the graph lives on.
+    l (int): Number of layers of the graph (scales approx. logarithmically with n).
+    p (float): The probability that a new vertex will ascend a layer.
+    vertices (ndarray): A matrix containing our vertices. Each row is a vertex.
+    edges (list):   A list of lists of indices, specifying each vertex's neighbours on each level.
+                    Moving between levels just changes the edge list.
+    p_holo (float): The probability that a hologram will be added after 2^(qn) insertions. A 
+                    hologram averages a sample of k vertices, making it easier to reach more nodes.
+    q_holo (float): The number of insertions to use to checkpoint the creation of holograms.
+    k_holo (float): The number of vectors to compose for building a hologram.
+    priv (float):   Multiplies with p for holograms, like a hologram "privilege" level.
+    """
+    pass
