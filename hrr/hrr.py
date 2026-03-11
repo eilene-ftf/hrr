@@ -9,6 +9,11 @@ import numpy as np # import linera algebra library
 from numpy.fft import fft,ifft
 import math # you also need to import basic math because python is silly
 from collections.abc import Sequence, ABCMeta
+import typing
+
+# pretty sure this is wrong and needs to be fixed but I'm very tired
+type HRR[d:int] = tuple[int]
+type HRRArray[n:int, d:int] = tuple[int, int]
 
 # Export type annotations for HRR and HRRArray
 class HRRMeta(ABCMeta):
@@ -34,7 +39,7 @@ def invPerm(perm):
     return inv
 
 # class for Tony Plate's Holographic Reduced Representations
-class HRR(Sequence, metaclass=HRRMeta):
+class HRR[d:int](Sequence, metaclass=HRRMeta):
     # Generate a vector of values sampled from a normal distribution
     # with a mean of zero and a standard deviation of 1/N
     def __init__(self,N=None,data=None, zero=False,large=0.8,small=0.2):
@@ -179,7 +184,7 @@ class HRR(Sequence, metaclass=HRRMeta):
         else:
             return self+other
 
-class HRRArray(Sequence, metaclass=HRRMeta):
+class HRRArray[n:int, d:int](Sequence, metaclass=HRRMeta):
     """Data structure for containing several HRRs.
 
     Attributes:
@@ -190,7 +195,7 @@ class HRRArray(Sequence, metaclass=HRRMeta):
     """
 
     def __init__(self, n:int, d:int, 
-                 data:list[HRR[d]] | np.ndarray[(n, d), np.float64] | None=None,
+                 data:list[HRR] | np.ndarray | None=None,
                  small:float=0.2,
                  large:float=0.8):
         self.__class__.__type_params__ = [n, d]
@@ -215,8 +220,8 @@ class HRRArray(Sequence, metaclass=HRRMeta):
     def __getitem__(self, i):
         return HRR(data=self.M[i, :], small=self.small, large=self.large)
 
-    def __matmul__(self, other: HRR[self.d] | HRRArray[k:int, self.d]
-                   ) -> np.ndarray[self.n, np.float64] | np.ndarray[(self.n, k), np.float64]:
+    def __matmul__(self, other: HRR | HRRArray
+                   ) -> np.ndarray:
         if isinstance(other, HRRArray):
             # dots each of n vectors in self with all k vectors in other
             return self.M @ other.M.T
@@ -225,8 +230,8 @@ class HRRArray(Sequence, metaclass=HRRMeta):
         else:
             raise TypeError(f"Other must be an HRR or HRRArray but is of type {type(other)}")
 
-    def __eq__(self, other: HRR[self.d] | HRRArray[k:int, self.d]
-                   ) -> np.ndarray[self.n, np.float64] | np.ndarray[(self.n, k), np.float64]:
+    def __eq__(self, other: HRR | HRRArray
+                   ) -> np.ndarray:
         if isinstance(other, HRRArray):
             # dots each of n vectors in self with all k vectors in other
             return self.M @ other.M.T

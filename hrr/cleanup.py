@@ -1,5 +1,5 @@
 import numpy as np
-from hrr import HRR, HRRArray
+from .hrr import HRR, HRRArray
 from typing import Callable
 from numpy.typing import ArrayLike, DTypeLike
 
@@ -36,9 +36,9 @@ class CleanupMemory:
         self.sim = sim
 
     def nearest(self, 
-                probe:np.ndarray[self.d, self.dtype] | HRR[self.d], 
+                probe:np.ndarray | HRR, 
                 k:int=1
-                ) -> tuple[HRRArray[(k, self.d)], np.ndarray[k, DTypeLike]]:
+                ) -> tuple[HRRArray, np.ndarray]:
         """Returns k nearest neighbours of probe using probe's similarity measure or self.sim 
         function if unavailable (default 1), and similarities of neighbours, in descending order.
 
@@ -54,7 +54,7 @@ class CleanupMemory:
         return HRRArray(np.zeros((k, self.d))), np.zeros(k)
 
     def insert(self,
-               trace: np.ndarray[self.d, self.dtype] | HRR[self.d]
+               trace: np.ndarray | HRR
                ):
         """Adds a new HRR into the memory, expanding it if necessary.
         
@@ -66,8 +66,8 @@ class CleanupMemory:
         """
         pass
 
-    def __getitem__(self, probe:HRR[self.d], showsim=False
-                    ) -> HRR[self.d] | tuple[HRR[self.d], self.dtype]:
+    def __getitem__(self, probe:HRR, showsim:bool=False
+                    ) -> HRR | tuple[HRR, DTypeLike]:
         """Fetches the nearest neighbour of the probe as a dictionary lookup.
 
         Args:
@@ -121,7 +121,7 @@ class NaiveMemory(CleanupMemory):
         self.populate(data)
 
     def populate(self,
-                 data: np.ndarray[k, self.d] | HRRArray[k, self.d]):
+                 data: np.ndarray | HRRArray):
         """Adds several HRRs to the memory.
 
         Args:
@@ -160,9 +160,9 @@ class NaiveMemory(CleanupMemory):
 
 
     def nearest(self, 
-                probe:np.ndarray[self.d, self.dtype] | HRR[self.d], 
+                probe:np.ndarray | HRR, 
                 k:int=1
-                ) -> tuple[HRRArray[(k, self.d)], np.ndarray[k, DTypeLike]]:
+                ) -> tuple[HRRArray, np.ndarray]:
         """Returns k nearest neighbours of probe using probe's similarity measure or self.sim 
         function if unavailable (default 1), and similarities of neighbours, in descending order.
 
@@ -187,7 +187,7 @@ class NaiveMemory(CleanupMemory):
         return HRRArray(k, self.d, data=self.memory[top_items]), sims[top_items]
 
     def insert(self,
-               trace: np.ndarray[self.d, self.dtype] | HRR[self.d]
+               trace: np.ndarray | HRR
                ):
         """Adds a new HRR into the memory, expanding it if necessary.
         
