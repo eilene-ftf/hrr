@@ -112,10 +112,7 @@ class NaiveMemory(CleanupMemory):
             None
         """
 
-        self.dtype = np.dtype(dtype) # unused for now, may be necessary with FHRRs
-        self.n = 0
-        self.d = d
-        self.sim = sim
+        super().__init__(0, d, dtype=dtype, sim=sim)
         internal_n = 2**int(np.ceil(np.log2(n)))
         self.memory = HRRArray(internal_n, d, data=np.zeros((internal_n, d), dtype=self.dtype))
         self.populate(data)
@@ -157,6 +154,8 @@ class NaiveMemory(CleanupMemory):
             newmem = np.zeros((internal_n, self.d), dtype=self.dtype)
             newmem[:self.n, :] = self.memory.M[:self.n, :]
             self.memory = HRRArray(internal_n, self.d, data=newmem)
+        
+        n += k
 
 
     def nearest(self, 
@@ -252,14 +251,156 @@ class Graph[n, d, l]:
     n (int): Number of vertices at the bottom.
     d (int): Number of dimensions of the space the graph lives on.
     l (int): Number of layers of the graph (scales approx. logarithmically with n).
-    p (float): The probability that a new vertex will ascend a layer.
+    m (float): Power for random number when setting level of inserted vector.
+    max_edges (int): The maximum number of edges per vertex.
+    k_nearest (int): The number of vertices to connect to a newly inserted vertex.
+    search (Callable): The search algorithm to find the k nearest neighbours of an inserted vector. 
     vertices (ndarray): A matrix containing our vertices. Each row is a vertex.
     edges (list):   A list of lists of indices, specifying each vertex's neighbours on each level.
                     Moving between levels just changes the edge list.
-    p_holo (float): The probability that a hologram will be added after 2^(qn) insertions. A 
+    p_holo (float): The probability that a hologram will be added after 2^(qlog2(n)) insertions. A 
                     hologram averages a sample of k vertices, making it easier to reach more nodes.
     q_holo (float): The number of insertions to use to checkpoint the creation of holograms.
-    k_holo (float): The number of vectors to compose for building a hologram.
+    k_holo (int):   The number of vectors to compose for building a hologram.
     priv (float):   Multiplies with p for holograms, like a hologram "privilege" level.
     """
-    pass
+   
+    def __init__(self, d:int, data:np.ndarray | None = None, p:float=0.1, 
+                 k_nearest:int=10,
+                 p_holo:float=0.0, q_holo:float=100, 
+                 k_holo:int=10, priv:1.0):
+        """Instantiates graph with vector vertices and multiple edge lists.
+
+        Args:
+            d (int): Dimension of the stored array (will be overridden if data is specified.
+            data (np.ndarray | None): Vectors to use as vertices at initialization.
+        """
+
+    def _grow(self, k:int):
+        """Doubles memory size if n + k > len(memory)
+
+        Args:
+            k (int): number of items to be added.
+
+        Returns:
+            None
+        """
+
+        if self.n + k > len(self.memory):
+            internal_n = 2**int(np.ceil(np.log2(self.n + k)))
+            newmem = np.zeros((internal_n, self.d), dtype=np.float64)
+            newmem[:self.n, :] = self.vertices[:self.n, :]
+            self.vertices = newmem
+            for edgelist in self.edges:
+                for i in range(n, n+k):
+                    edgelist[i] = []
+
+        n += k
+
+
+
+    def insert(self, v:np.ndarray):
+        """Direct implementation of Malkov & Yashunin (2019, p. 827). Inserts a vertex into an 
+        HNSW graph.
+
+        First chooses the highest layer the new vertex will live on. For every layer above that,
+        traverses to the nearest neighbour of v. For every layer on that layer and below, appends
+        the index of v and connects v with its k nearest neighbours. Prunes edges exceeding the
+        maximum number.
+
+        Args:
+            v (np.ndarray): The new vector to construct a vertex with.
+        
+        Returns:
+            None
+        """
+        
+        i = self.n # index of the new vertex
+        self._grow(1)
+        self.vertices[n, :] = v
+        w = [] # nearest neighbour candidate list
+        ep = np.random.choice(self.layers[-1]) # entrypoint
+        newv_layer = int(np.floor(-np.log(np.random.random()) * m))
+        # Make sure all layers have a list to store vertices in
+        while len(self.layers) < newv_layer:
+            self.layers.append([])
+        self.l = len(self.layers)
+        # On layers where we aren't placing the new vertex, just traverse down
+        for j in range(self.l, newv_layer, -1):
+            w = self.search_layer(v, ep, j, 1) # gets nearest neighbour
+            ep = w[0]
+
+        for j in range(newv_layer, -1, -1):
+            self.layers[j].append[i]
+            w = self.search_layer(v, ep, j, self.k_nearest) # gets nearest neighbour candidates
+            neighbours = self.select_neighbours(v, w, j) # get nearest neighbours from candidates
+            for neighbour in neighbours: # connect all neighbours to v
+                self.edges[j][neighbour].append(i)
+                self.edges[j][i].append(neighbour)
+                
+                if len(self.edges[j][neighbour]) > self.max_edges: # cap number of edges to max
+                    self.edges[j][neighbour] = self.select_neighbours(vertices[neighbour], 
+                                                                      self.edges[j][neighbour],
+                                                                      j, k=self.max_edges)
+            ep = neighbours[0] if neighbours else i
+
+
+    def search_layer(self, v:np.ndarray, ep:int, layer:int, k:int|None=None) -> list[int]:
+        """Searches a layer for the k nearest neighbours of v.
+
+        Args:
+            v (np.ndarray): Probe to search over layer with.
+            ep (int): Entrypoint for the search.
+            layer (int): Layer the search takes place on.
+            k (int | None): Number of neighbours to return.
+        
+        Returns:
+            list[int]: a list of k nearest neighbour indices on selected layer.
+        """
+        
+        # If k is not specified, set to default
+        if k is None:
+            k = self.k_nearest
+
+        visited = [ep] # visited nodes
+        candidates = [ep] # candidates to consider adding to w
+        w = [ep] # list of nearest neighbours
+
+        sim_cands = [vertices[can] @ v for can in candidates]
+        sim_ws = [vertices[ww] @ v for ww in w]
+        
+        while len(candidates) > 0: # This is incomplete, something's really wrong here
+            # get similarity of all candidates and all current neighbours to v
+            nearest_cand = argmax(sim_cands) # find the closest of all candidates
+            farthest_w = argmin(sim_ws) # find the farthest of all neighbours
+
+            # if the nearest candidate is no nearer than the farthest neighbour, we're done
+            if sim_cands[nearest_cand] <= sim_ws[farthest_w]:
+                break
+            
+            # Otherwise, 
+            for neighbour in self.edges[layer][c]:
+                if neighbour not in visited:
+                    visited.append(neighbour)
+                    sim_ws = [vertices[ww] @ v for ww in w]
+                    farthest_w = argmin(sim_ws)
+
+                    if vertices[neighbour] @ v >= sim_ws[farthest_w] or len(w) < k:
+                        sim = v @ self.vertices[neighbour]
+                        candidates.append(neighbour)
+                        sim_cands.append(sim)
+                        w.append(neighbour)
+                        sim_ws.append(sim)
+                        if len(w) > k:
+                            del w[farthest_w]
+                            del sim_ws[farthest_w]
+
+        return w
+
+    def select_neighbours(self, v:np.ndarray, candidates:list[int], layer:int, k:int|None=None
+                          ) -> list[int]:
+        if k is None:
+            k = self.k_nearest
+        sims = {c:v @ self.vertices[c] for c in candidates}
+        w = sorted(candidates, key=lambda c: sims[c], reverse=True)
+        return w[:k]
