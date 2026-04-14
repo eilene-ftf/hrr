@@ -358,7 +358,7 @@ class Graph[n, d, l]:
         self.l = len(self.layers)
         # On layers where we aren't placing the new vertex, just traverse down
         for j in range(self.l-1, newv_layer-1, -1):
-            w = self.search_layer(v, ep, j) # gets nearest neighbours
+            w = self.search_layer(v, ep, j, k=1) # gets nearest neighbours
             ep = w
 
         for j in range(newv_layer, -1, -1):
