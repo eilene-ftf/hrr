@@ -266,7 +266,7 @@ class Graph[n, d, l]:
     """
    
     def __init__(self, d:int, data:np.ndarray | None = None, p:float=0.1, 
-                 m:float=0.2, k_nearest:int=10,
+                 m:float|None=None, k_nearest:int=10,
                  p_holo:float=0.0, q_holo:float=100, 
                  k_holo:int=10, priv:float=1.0, max_edges:int=50):
         """Instantiates graph with vector vertices and multiple edge lists.
@@ -286,7 +286,9 @@ class Graph[n, d, l]:
 
         self.layers = []
         self.edges = []
-        self.m = m
+        self.m = 1/np.log(k_nearest)
+        if m is not None:
+            self.m = m
         self.m_conn = 0
         self.k_nearest = k_nearest
         self.p = p
@@ -381,6 +383,7 @@ class Graph[n, d, l]:
                         self.edges[j][neighbour] = self.select_neighbours(self.vertices[neighbour], 
                                                                           self.edges[j][neighbour],
                                                                           j, k=self.max_edges)
+                        self.m_conn -= 1
             ep = w
         
 
@@ -405,15 +408,6 @@ class Graph[n, d, l]:
         visited = ep.copy() # visited nodes
         candidates = ep.copy() # candidates whose neighbours we consider adding to w
         w = ep.copy() # list of nearest neighbours
-
-        #if len(w) < k:
-        #    w += list(np.random.choice(self.layers[layer], size=k-len(w), replace=False))
-
-        #candidate_neighbourhood = []
-        #for can in candidates:
-        #    for neighbour in edges[layer][can]:
-        #        if neighbour not in visited:
-        #            candidate_neighbourhood.append(neighbour)
 
         # get similarity of all candidates and current neighbours to v
         sim_cands = [self.vertices[can] @ v for can in candidates]
@@ -458,11 +452,16 @@ class Graph[n, d, l]:
         sims = [v @ self.vertices[c] for c in candidates] # similarity of each candidate to v
         w = candidates.copy() 
         if extend:
-            for c in candidates:
-                for conn in self.edges[layer][c]:
-                    if conn not in w:
-                        w.append(conn)
-                        sims.append(v @ self.vertices[conn])
+            while True:
+                for c in candidates:
+                    for conn in self.edges[layer][c]:
+                        if conn not in w:
+                            w.append(conn)
+                            sims.append(v @ self.vertices[conn])
+                if len(w) >= k or self.n < k or np.all(ww in candidates for ww in w):
+                    break
+                candidates = w.copy()
+
         discard = []
         discard_sims = []
         while len(w) > 0 and len(r) < k:
@@ -482,5 +481,18 @@ class Graph[n, d, l]:
                 nearest = np.argmax(discard_sims)
                 r_sims.append(discard_sims.pop(nearest))
                 r.append(discard.pop(nearest))
+
+        # fallback on the off chance r is too small, just add some random connections
+        while len(r) < k and len(self.layers[layer]) > k:
+            n_to_append = k - len(r)
+            list_to_add = list(np.random.choice(list(self.layers[layer]), 
+                                                size=min(n_to_append, len(self.layers[layer])), 
+                                                replace=False)
+                               )
+            for item in list_to_add:
+                if item not in r:
+                    r_sims.append(self.vertices[item] @ v)
+                    r.append(item)
+                if len(r) >= k: break
 
         return sorted(r, key=lambda i: r_sims[r.index(i)], reverse=True)
