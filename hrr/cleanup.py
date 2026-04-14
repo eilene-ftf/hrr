@@ -155,7 +155,7 @@ class NaiveMemory(CleanupMemory):
             newmem[:self.n, :] = self.memory.M[:self.n, :]
             self.memory = HRRArray(internal_n, self.d, data=newmem)
         
-        n += k
+        self.n += k
 
 
     def nearest(self, 
@@ -266,15 +266,34 @@ class Graph[n, d, l]:
     """
    
     def __init__(self, d:int, data:np.ndarray | None = None, p:float=0.1, 
-                 k_nearest:int=10,
+                 m:float=0.2, k_nearest:int=10,
                  p_holo:float=0.0, q_holo:float=100, 
-                 k_holo:int=10, priv:1.0):
+                 k_holo:int=10, priv:float=1.0, max_edges:int=50):
         """Instantiates graph with vector vertices and multiple edge lists.
 
         Args:
             d (int): Dimension of the stored array (will be overridden if data is specified.
             data (np.ndarray | None): Vectors to use as vertices at initialization.
         """
+
+        self.d = d
+
+        if not data:
+            self.n = 0
+        else:
+            self.n, self.d = data.shape # if data shape and d are incongruous, data shape overrides
+            self.vertices = data
+
+        self.layers = []
+        self.edges = []
+        self.m = m
+        self.m_conn = 0
+        self.k_nearest = k_nearest
+        self.p = p
+        self.p_holo = p_holo
+        self.k_holo = k_holo
+        self.priv = priv
+        self.max_edges = max_edges
 
     def _grow(self, k:int):
         """Doubles memory size if n + k > len(memory)
@@ -286,16 +305,16 @@ class Graph[n, d, l]:
             None
         """
 
-        if self.n + k > len(self.memory):
+        if self.n + k > len(self.vertices):
             internal_n = 2**int(np.ceil(np.log2(self.n + k)))
             newmem = np.zeros((internal_n, self.d), dtype=np.float64)
             newmem[:self.n, :] = self.vertices[:self.n, :]
             self.vertices = newmem
             for edgelist in self.edges:
-                for i in range(n, n+k):
+                for i in range(self.n, self.n+k):
                     edgelist[i] = []
 
-        n += k
+        self.n += k
 
 
 
@@ -314,38 +333,59 @@ class Graph[n, d, l]:
         Returns:
             None
         """
+
         
         i = self.n # index of the new vertex
-        self._grow(1)
-        self.vertices[n, :] = v
+        if i == 0:
+            self.vertices = np.zeros((1, 256))
+            self.n = 1
+        else:
+            self._grow(1)
+        
+        self.vertices[i, :] = v
         w = [] # nearest neighbour candidate list
-        ep = np.random.choice(self.layers[-1]) # entrypoint
-        newv_layer = int(np.floor(-np.log(np.random.random()) * m))
+        newv_layer = int(np.floor(-np.log(np.random.random()) * self.m))
         # Make sure all layers have a list to store vertices in
-        while len(self.layers) < newv_layer:
-            self.layers.append([])
+        highest_layer = min(len(self.layers), newv_layer)
+        while len(self.layers) <= newv_layer:
+            self.layers.append({i}.copy())
+            self.edges.append({i: [].copy()})
+
+        ep = list(np.random.choice(list(self.layers[-1]), 
+                                   size=min(self.k_nearest, len(self.layers[-1])), 
+                                   replace=False
+                                   )) # entrypoints
         self.l = len(self.layers)
         # On layers where we aren't placing the new vertex, just traverse down
-        for j in range(self.l, newv_layer, -1):
-            w = self.search_layer(v, ep, j, 1) # gets nearest neighbour
-            ep = w[0]
+        for j in range(self.l-1, newv_layer-1, -1):
+            w = self.search_layer(v, ep, j) # gets nearest neighbours
+            ep = w
 
         for j in range(newv_layer, -1, -1):
-            self.layers[j].append[i]
-            w = self.search_layer(v, ep, j, self.k_nearest) # gets nearest neighbour candidates
+            if i not in self.layers[j]:
+                self.layers[j].add(i)
+            if i not in self.edges[j]:
+                self.edges[j][i] = []
+            l, e = self.layers[j], self.edges[j]
+            w = self.search_layer(v, ep, j) # gets nearest neighbour candidates
             neighbours = self.select_neighbours(v, w, j) # get nearest neighbours from candidates
-            for neighbour in neighbours: # connect all neighbours to v
-                self.edges[j][neighbour].append(i)
-                self.edges[j][i].append(neighbour)
-                
-                if len(self.edges[j][neighbour]) > self.max_edges: # cap number of edges to max
-                    self.edges[j][neighbour] = self.select_neighbours(vertices[neighbour], 
-                                                                      self.edges[j][neighbour],
-                                                                      j, k=self.max_edges)
-            ep = neighbours[0] if neighbours else i
+            for neighbour in neighbours: # connect all neighbours to i
+                if neighbour != i:
+                    if i not in self.edges[j][neighbour]:
+                        self.edges[j][neighbour].append(i)
+                    if neighbour not in self.edges[j][i]:
+                        self.edges[j][i].append(neighbour)
+                    self.m_conn += 1
+                    
+                    if len(self.edges[j][neighbour]) > self.max_edges: # cap number of edges to max
+                        self.edges[j][neighbour] = self.select_neighbours(self.vertices[neighbour], 
+                                                                          self.edges[j][neighbour],
+                                                                          j, k=self.max_edges)
+            ep = w
+        
 
 
-    def search_layer(self, v:np.ndarray, ep:int, layer:int, k:int|None=None) -> list[int]:
+    def search_layer(self, v:np.ndarray, ep:list[int], layer:int, k:int|None=None) -> list[int]:
         """Searches a layer for the k nearest neighbours of v.
 
         Args:
@@ -360,32 +400,43 @@ class Graph[n, d, l]:
         
         # If k is not specified, set to default
         if k is None:
-            k = self.k_nearest
+            k = min(len(self.layers[layer]), self.k_nearest)
 
-        visited = [ep] # visited nodes
-        candidates = [ep] # candidates to consider adding to w
-        w = [ep] # list of nearest neighbours
+        visited = ep.copy() # visited nodes
+        candidates = ep.copy() # candidates whose neighbours we consider adding to w
+        w = ep.copy() # list of nearest neighbours
 
-        sim_cands = [vertices[can] @ v for can in candidates]
-        sim_ws = [vertices[ww] @ v for ww in w]
+        #if len(w) < k:
+        #    w += list(np.random.choice(self.layers[layer], size=k-len(w), replace=False))
+
+        #candidate_neighbourhood = []
+        #for can in candidates:
+        #    for neighbour in edges[layer][can]:
+        #        if neighbour not in visited:
+        #            candidate_neighbourhood.append(neighbour)
+
+        # get similarity of all candidates and current neighbours to v
+        sim_cands = [self.vertices[can] @ v for can in candidates]
+        sim_ws = [self.vertices[ww] @ v for ww in w]
         
-        while len(candidates) > 0: # This is incomplete, something's really wrong here
-            # get similarity of all candidates and all current neighbours to v
-            nearest_cand = argmax(sim_cands) # find the closest of all candidates
-            farthest_w = argmin(sim_ws) # find the farthest of all neighbours
+        while len(candidates) > 0: 
+            c = np.argmax(sim_cands) # find the closest of all candidate neighbours
+            sim_c = sim_cands.pop(c) # keep value, but remove it from later consideration
+            cand = candidates.pop(c)
+            farthest_w = np.argmin(sim_ws) # find the farthest of all neighbours
 
-            # if the nearest candidate is no nearer than the farthest neighbour, we're done
-            if sim_cands[nearest_cand] <= sim_ws[farthest_w]:
+            # if the nearest candidate is farther than the farthest neighbour, we're done
+            if sim_c < sim_ws[farthest_w]:
                 break
             
-            # Otherwise, 
-            for neighbour in self.edges[layer][c]:
+            # Otherwise, search the candidate's neighbourhood 
+            for neighbour in self.edges[layer][cand]:
                 if neighbour not in visited:
-                    visited.append(neighbour)
-                    sim_ws = [vertices[ww] @ v for ww in w]
-                    farthest_w = argmin(sim_ws)
+                    visited.append(neighbour) # add it to the visited list so we only check it once
+                    farthest_w = np.argmin(sim_ws) # get the farthest w
 
-                    if vertices[neighbour] @ v >= sim_ws[farthest_w] or len(w) < k:
+                    # If neighbour is better than the worst current neighbour, or |w| < k, add it
+                    if self.vertices[neighbour] @ v > sim_ws[farthest_w] or len(w) < k:
                         sim = v @ self.vertices[neighbour]
                         candidates.append(neighbour)
                         sim_cands.append(sim)
@@ -397,10 +448,39 @@ class Graph[n, d, l]:
 
         return w
 
-    def select_neighbours(self, v:np.ndarray, candidates:list[int], layer:int, k:int|None=None
-                          ) -> list[int]:
+    def select_neighbours(self, v:np.ndarray, candidates:list[int], layer:int, k:int|None=None,
+                          extend:bool=True, keep:bool=True) -> list[int]:
         if k is None:
             k = self.k_nearest
-        sims = {c:v @ self.vertices[c] for c in candidates}
-        w = sorted(candidates, key=lambda c: sims[c], reverse=True)
-        return w[:k]
+
+        r = []
+        r_sims = []
+        sims = [v @ self.vertices[c] for c in candidates] # similarity of each candidate to v
+        w = candidates.copy() 
+        if extend:
+            for c in candidates:
+                for conn in self.edges[layer][c]:
+                    if conn not in w:
+                        w.append(conn)
+                        sims.append(v @ self.vertices[conn])
+        discard = []
+        discard_sims = []
+        while len(w) > 0 and len(r) < k:
+            nearest = np.argmax(sims)
+            sim_e = sims.pop(nearest)
+            e = w.pop(nearest)
+
+            if not r_sims or np.max(r_sims) < sim_e:
+                r.append(e)
+                r_sims.append(sim_e)
+            else:
+                discard.append(e)
+                discard_sims.append(e)
+
+        if keep:
+            while len(discard) > 0 and len(r) < k:
+                nearest = np.argmax(discard_sims)
+                r_sims.append(discard_sims.pop(nearest))
+                r.append(discard.pop(nearest))
+
+        return sorted(r, key=lambda i: r_sims[r.index(i)], reverse=True)
